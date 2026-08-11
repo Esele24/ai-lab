@@ -1,0 +1,125 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>AI Lab — seven AI projects, one app</title>
+  <link rel="stylesheet" href="/app.css">
+</head>
+<body>
+  <div class="topbar">
+    <a class="brand" href="/"><span class="dot"></span> AI Lab</a>
+    <nav class="topnav"></nav>
+  </div>
+
+  <div class="wrap">
+    <div class="hero reveal">
+      <h1><span class="badge-num">04</span>The full AI-powered app</h1>
+      <p>Seven AI projects sharing one backend, one model client, one database and one
+         design system. This dashboard is project 04 — not a landing page for the others,
+         but the application they live inside. Every number below is read from disk.</p>
+    </div>
+
+    <div id="status"></div>
+
+    <div class="grid g4" id="stats"></div>
+
+    <h2 class="section">The tools</h2>
+    <div class="grid g2" id="tools"></div>
+
+    <h2 class="section">Activity log</h2>
+    <div class="card">
+      <p class="muted small" style="margin-top:0">Written to <code>data/ai_lab.db</code> by every
+        tool, and read back here. It survives restarting the server — which a variable in
+        memory would not.</p>
+      <div id="log"></div>
+    </div>
+
+    <h2 class="section">What is actually running</h2>
+    <div class="grid g2">
+      <div class="card">
+        <h3>The model</h3>
+        <p class="small muted" id="models"></p>
+        <p class="small">There is <b>no OpenAI key and no Anthropic key</b> on this machine.
+          The project list this was built from assumed OpenAI; this runs on the key that
+          exists and works, called over plain HTTPS in <code>core/gemini.py</code>.</p>
+        <p class="small">A <code>429</code> whose body says <code>limit: 0</code> means the
+          <b>model name is wrong for the key</b> — not that you are being rate limited.</p>
+      </div>
+      <div class="card">
+        <h3>The dependencies</h3>
+        <p class="small">Backend: <code>http.server</code>, <code>sqlite3</code>,
+          <code>numpy</code>, <code>pandas</code>, <code>pypdf</code>,
+          <code>python-docx</code>, <code>requests</code>. Frontend: none.</p>
+        <p class="small muted">No Flask, no Streamlit, no scikit-learn, no chart library, no
+          CDN. Partly a constraint — a 36 MB <code>scipy</code> wheel would not finish
+          downloading — and partly the point: the classifier in project 03 is written out
+          by hand instead of imported.</p>
+      </div>
+    </div>
+
+    <div class="demo-banner">
+      Built by Esele Okogbo · Port Harcourt. The seven projects come from a widely-shared
+      "AI projects that get you hired" carousel; what is here is the honest build of that
+      list, including the parts of it that could not be built as advertised.
+    </div>
+  </div>
+
+  <script src="/app.js"></script>
+  <script>
+    const TOOLS = [
+      ["01", "Smart Document Assistant", "Upload a PDF, ask questions, get answers that cite the page. Retrieval-augmented generation with a 3,072-dimension index.", "/doc"],
+      ["02", "AI Data Analysis", "Upload a CSV and ask in plain English. The model picks the operation; pandas computes every number.", "/data"],
+      ["03", "Custom Trained Model", "TF-IDF and logistic regression written from scratch in numpy, trained on 5,574 real labelled messages.", "/model"],
+      ["05", "Smarter Prompt System", "Build prompts, save them to a library, and A/B test two against each other with the judge order shuffled.", "/prompt"],
+      ["06", "Industry-Specific Helper", "Document review against a per-industry clause checklist, so it can report what is missing.", "/industry"],
+      ["07", "AI Voice Agent", "Speak to it in the browser; it answers out loud and writes a real booking to the database.", "/voice"],
+    ];
+
+    (async () => {
+      $("#tools").innerHTML = TOOLS.map(([n, title, blurb, href]) => `
+        <a class="card tool-card reveal" href="${href}">
+          <div class="n">PROJECT ${n}</div>
+          <h2>${title}</h2>
+          <p class="small muted" style="margin-bottom:0">${blurb}</p>
+        </a>`).join("");
+
+      let data;
+      try { data = await api("/api/dashboard"); }
+      catch (error) { show("#status", escapeHtml(error.message), "err"); return; }
+
+      if (!data.key_present) {
+        show("#status", "No <code>GEMINI_API_KEY</code> in <code>.env</code>. Six of the seven tools will fail. Copy <code>.env.example</code> to <code>.env</code>, paste the key from <code>tender-tool/.env.local</code>, restart, then run <code>python check_setup.py</code>.", "err");
+      } else if (data.failures) {
+        show("#status", `${data.failures} logged run(s) failed — see the activity log.`, "warn");
+      }
+
+      $("#models").innerHTML = `Chat: <code>${escapeHtml(data.chat_model)}</code><br>
+        Embeddings: <code>${escapeHtml(data.embed_model)}</code> (3,072 dimensions)`;
+
+      const stats = [
+        ["Tool runs logged", data.total_runs],
+        ["Prompts saved", data.prompts_saved],
+        ["Voice jobs booked", data.bookings],
+        ["Doc chunks indexed", data.doc_chunks],
+        ["Classifier", data.model_ready ? (data.model_accuracy * 100).toFixed(2) + "%" : "not trained"],
+        ["Dataset loaded", data.dataset_loaded || "none"],
+      ];
+      $("#stats").innerHTML = stats.map(([label, value]) => `
+        <div class="card stat reveal">
+          <div class="v">${escapeHtml(value)}</div>
+          <div class="l">${label}</div>
+        </div>`).join("");
+
+      $("#log").innerHTML = data.recent.length
+        ? table(data.recent.map((row) => ({
+            when: row.ts.replace("T", " ").replace("+00:00", " UTC"),
+            project: row.project, action: row.action,
+            detail: (row.detail || "").slice(0, 90),
+            ok: row.ok ? "ok" : "FAILED",
+          })))
+        : '<p class="muted small">Nothing yet. Use any tool and it appears here.</p>';
+    })();
+  </script>
+</body>
+</html>

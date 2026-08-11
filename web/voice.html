@@ -1,0 +1,195 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>07 AI Voice Agent — AI Lab</title>
+  <link rel="stylesheet" href="/app.css">
+</head>
+<body>
+  <div class="topbar">
+    <a class="brand" href="/"><span class="dot"></span> AI Lab</a>
+    <nav class="topnav"></nav>
+  </div>
+
+  <div class="wrap">
+    <div class="hero reveal">
+      <h1><span class="badge-num">07</span>AI Voice Agent</h1>
+      <p>Speak to it, it answers out loud, and when it has your name, number, date and
+         service it writes a real booking to the database. Speech in and out is the browser's
+         own Web Speech API; the conversation and the intent are the model's.</p>
+    </div>
+
+    <div class="notice warn">
+      <b>Said plainly: this is a browser voice agent, not a phone agent.</b> The carousel
+      shows inbound calls, call routing and transfers. That needs Twilio or Vapi, a purchased
+      number and per-minute billing — none of which exists here, so none of it is claimed
+      here. The turn logic in <code>core/voice.py</code> is the part that would carry over
+      unchanged if a number were attached: swapping the transport does not change the agent.
+    </div>
+
+    <div class="grid" style="grid-template-columns:minmax(0,1fr) minmax(0,340px)">
+      <div class="card">
+        <h2 style="text-align:center">Harbour Point Catering &amp; Events</h2>
+        <p class="tiny muted" style="text-align:center;margin-top:0">A fictional Port Harcourt
+          business — same rule as every other demo in this workspace.</p>
+
+        <button id="mic" class="mic" title="Hold a conversation">🎙</button>
+        <p id="mic-label" class="small muted" style="text-align:center">Click to talk</p>
+
+        <div id="unsupported"></div>
+
+        <div id="chat" style="margin-top:14px"></div>
+
+        <div class="row" style="margin-top:14px">
+          <input type="text" id="typed" placeholder="…or type it instead" style="flex:1;min-width:190px">
+          <button id="send" class="ghost">Send</button>
+          <button id="reset" class="ghost small">New conversation</button>
+        </div>
+        <p class="tiny muted">Typing works identically — the agent does not know or care which
+          one you used, which is the point of keeping the transport out of the agent.</p>
+      </div>
+
+      <div>
+        <div class="card">
+          <h3>Bookings taken</h3>
+          <p class="tiny muted" style="margin-top:0">Written to SQLite by Python <i>after</i> it
+            checks the four required fields — not by the model deciding a booking happened.
+            That is why this agent cannot confirm a booking that does not exist.</p>
+          <div id="bookings"></div>
+        </div>
+
+        <div class="card" style="margin-top:16px">
+          <h3>What it is forbidden to do</h3>
+          <ul class="tiny muted" style="padding-left:18px;margin-bottom:0">
+            <li><b>Never invent a price.</b> It has no price list. Asked what something costs,
+              it collects details and says a coordinator will quote.</li>
+            <li><b>Never confirm a date is free.</b> It cannot see a calendar.</li>
+            <li><b>Never claim</b> to have sent an email, text or invite.</li>
+            <li>Replies are capped near 40 words with no markdown — a speech synthesiser reads
+              asterisks out loud, and nobody on a call can follow a paragraph.</li>
+          </ul>
+        </div>
+
+        <div class="card" style="margin-top:16px">
+          <h3>Browser support</h3>
+          <p class="tiny muted" style="margin-bottom:0">Speech recognition needs Chrome or Edge.
+            Firefox and Safari have no <code>SpeechRecognition</code>; there the typed input is
+            the fallback and the agent still speaks its replies.</p>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script src="/app.js"></script>
+  <script>
+    const Recognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+    let history = [];
+    let recogniser = null;
+    let listening = false;
+
+    if (!Recognition) {
+      show("#unsupported",
+        "This browser has no speech recognition. Use Chrome or Edge to talk, or type below — everything else works the same.",
+        "warn");
+      $("#mic").disabled = true;
+      $("#mic-label").textContent = "Speech not supported here";
+    }
+
+    function speak(text) {
+      if (!window.speechSynthesis) return;
+      speechSynthesis.cancel();
+      const utterance = new SpeechSynthesisUtterance(text);
+      utterance.rate = 1.02;
+      utterance.pitch = 1;
+      speechSynthesis.speak(utterance);
+    }
+
+    function render() {
+      $("#chat").innerHTML = history.map((turn) =>
+        `<div class="turn ${turn.role === "user" ? "user" : "agent"}">${escapeHtml(turn.text)}</div>`
+      ).join("");
+      $("#chat").scrollTop = $("#chat").scrollHeight;
+    }
+
+    async function send(utterance) {
+      if (!utterance.trim()) return;
+      const priorHistory = [...history];
+      history.push({ role: "user", text: utterance });
+      render();
+      $("#mic-label").innerHTML = '<span class="spinner"></span> Thinking…';
+      try {
+        const turn = await api("/api/voice/turn", { history: priorHistory, utterance });
+        history.push({ role: "agent", text: turn.reply });
+        render();
+        speak(turn.reply);
+        $("#mic-label").textContent = turn.needs_human
+          ? "Flagged for a human — intent: " + turn.intent
+          : "Intent: " + turn.intent;
+        if (turn.booking_id) {
+          show("#unsupported", `Booking #${turn.booking_id} written to the database.`, "good");
+          loadBookings();
+        }
+      } catch (error) {
+        show("#unsupported", escapeHtml(error.message), "err");
+        $("#mic-label").textContent = "Click to talk";
+      }
+    }
+
+    $("#mic").onclick = () => {
+      if (!Recognition) return;
+      if (listening) { recogniser?.stop(); return; }
+      recogniser = new Recognition();
+      recogniser.lang = "en-NG";       // falls back to en-US where en-NG is unavailable
+      recogniser.interimResults = false;
+      recogniser.maxAlternatives = 1;
+      recogniser.onstart = () => {
+        listening = true;
+        $("#mic").classList.add("live");
+        $("#mic-label").textContent = "Listening… click again to stop";
+      };
+      recogniser.onresult = (event) => send(event.results[0][0].transcript);
+      recogniser.onerror = (event) => {
+        $("#mic-label").textContent = event.error === "not-allowed"
+          ? "Microphone permission was refused — type instead"
+          : "Did not catch that (" + event.error + ")";
+      };
+      recogniser.onend = () => { listening = false; $("#mic").classList.remove("live"); };
+      recogniser.start();
+    };
+
+    $("#send").onclick = () => { send($("#typed").value); $("#typed").value = ""; };
+    $("#typed").addEventListener("keydown", (event) => {
+      if (event.key === "Enter") $("#send").click();
+    });
+    $("#reset").onclick = () => {
+      history = []; render();
+      speechSynthesis?.cancel();
+      $("#mic-label").textContent = "Click to talk";
+      show("#unsupported", "");
+    };
+
+    async function loadBookings() {
+      try {
+        const data = await api("/api/voice/bookings");
+        $("#bookings").innerHTML = data.bookings.length
+          ? data.bookings.slice(0, 8).map((booking) => `
+              <div class="cite">
+                <div class="row" style="justify-content:space-between">
+                  <b>${escapeHtml(booking.caller || "unnamed")}</b>
+                  <span class="pill ${booking.handled ? "ok" : "warn"}">${booking.handled ? "HANDLED" : "NEW"}</span>
+                </div>
+                <p class="tiny" style="margin:5px 0">${escapeHtml(booking.detail || "")}</p>
+                <p class="tiny muted" style="margin:0">${escapeHtml(booking.ts.replace("T", " "))}</p>
+                ${booking.handled ? "" : `<button class="ghost small mark" data-id="${booking.id}" style="margin-top:6px">Mark handled</button>`}
+              </div>`).join("")
+          : '<p class="small muted">None yet. Book something and it appears here.</p>';
+        document.querySelectorAll(".mark").forEach((button) =>
+          button.onclick = async () => { await api("/api/voice/handled", { id: button.dataset.id }); loadBookings(); });
+      } catch { /* dashboard still works without this */ }
+    }
+
+    loadBookings();
+  </script>
+</body>
+</html>

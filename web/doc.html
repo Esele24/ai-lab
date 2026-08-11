@@ -1,0 +1,167 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>01 Smart Document Assistant — AI Lab</title>
+  <link rel="stylesheet" href="/app.css">
+</head>
+<body>
+  <div class="topbar">
+    <a class="brand" href="/"><span class="dot"></span> AI Lab</a>
+    <nav class="topnav"></nav>
+  </div>
+
+  <div class="wrap">
+    <div class="hero reveal">
+      <h1><span class="badge-num">01</span>Smart Document Assistant</h1>
+      <p>Ask a question of your documents and get an answer that names the page it came
+         from. An answer you cannot trace back to a page is worth very little when you are
+         checking a contract — so citation is not a feature here, it is the constraint.</p>
+    </div>
+
+    <div class="grid" style="grid-template-columns:minmax(0,1fr) minmax(0,320px)">
+      <div>
+        <div class="card">
+          <h2>Ask</h2>
+          <div id="indexed"></div>
+          <label class="field">
+            <span>Your question</span>
+            <input type="text" id="question" placeholder="What are the payment terms and the penalty for late delivery?">
+          </label>
+          <div class="row">
+            <button id="ask">Ask</button>
+            <label class="small muted">Excerpts to retrieve
+              <input type="number" id="k" value="5" min="3" max="10" style="width:64px;display:inline-block;margin-left:6px">
+            </label>
+          </div>
+          <div id="out"></div>
+        </div>
+
+        <div class="card" style="margin-top:16px">
+          <h3>How this works, in four steps</h3>
+          <ol class="small muted">
+            <li><b>Extract</b> — text out of the file, <i>keeping the page number</i>
+                (<code>core/docs.py</code>).</li>
+            <li><b>Chunk</b> — split on sentence boundaries, ~1,200 characters with 150 of
+                overlap. Splitting mid-sentence is the classic RAG bug: the excerpt reads as
+                a fragment and the model fills the gap by inventing. The overlap means a fact
+                sitting on a chunk boundary survives whole somewhere.</li>
+            <li><b>Embed</b> — each chunk becomes 3,072 numbers describing its meaning. Your
+                question becomes 3,072 numbers the same way, with a
+                <i>different task type</i> — using the same one for both measurably degrades
+                retrieval.</li>
+            <li><b>Retrieve and answer</b> — cosine similarity picks the closest chunks
+                (<code>core/vectors.py</code>), and <i>only those</i> reach the prompt.</li>
+          </ol>
+          <p class="small">The model never sees your whole document. It sees five paragraphs
+             and a rule saying it may not go beyond them. That is why it can say
+             <i>“that isn’t in the documents you uploaded”</i> instead of guessing.</p>
+        </div>
+      </div>
+
+      <div>
+        <div class="card">
+          <h3>Documents</h3>
+          <div class="drop" id="drop">
+            <input type="file" id="file" multiple accept=".pdf,.docx,.txt,.md">
+            <div style="font-size:1.6rem">⬆</div>
+            <b class="small">Drop files or click</b>
+            <div class="tiny muted">PDF · DOCX · TXT · MD · 30 MB cap</div>
+          </div>
+          <div id="picked"></div>
+          <button id="index" style="width:100%;margin-top:10px" disabled>Index these documents</button>
+          <p class="tiny muted" style="margin-bottom:0">The index is saved to
+            <code>data/doc_index/</code>, so a restart does not re-embed — and re-pay for —
+            the same PDF.</p>
+        </div>
+
+        <div class="card" style="margin-top:16px">
+          <h3>Known limits</h3>
+          <ul class="tiny muted" style="padding-left:18px;margin-bottom:0">
+            <li><b>No OCR.</b> A scanned PDF has no text layer. This says so rather than
+                returning nothing.</li>
+            <li>Indexing is one embedding request per chunk, so a long PDF takes a
+                minute. Deliberate: the batch endpoint fails the whole batch on one bad
+                input, and a 60-page PDF is exactly where one bad chunk is likely.</li>
+            <li>DOCX has no page numbers until it is rendered, so it cites the filename
+                only. A guessed page number is worse than none.</li>
+          </ul>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script src="/app.js"></script>
+  <script>
+    let chosen = [];
+
+    function renderStatus(status) {
+      $("#indexed").innerHTML = status.chunks
+        ? `<div class="notice info">Indexed <b>${status.chunks}</b> chunks from
+             ${status.sources.map(escapeHtml).join(", ")}</div>`
+        : `<div class="notice warn">Nothing indexed yet — upload a document on the right.</div>`;
+      $("#ask").disabled = !status.chunks;
+    }
+
+    dropzone($("#drop"), (files) => {
+      chosen = files;
+      $("#picked").innerHTML = `<p class="tiny" style="margin:8px 0 0">${
+        files.map((file) => `${escapeHtml(file.name)} <span class="muted">(${(file.size / 1024).toFixed(0)} KB)</span>`).join("<br>")
+      }</p>`;
+      $("#index").disabled = false;
+    });
+
+    $("#index").onclick = async () => {
+      const button = $("#index");
+      busy(button, true, "Embedding…");
+      show("#out", "");
+      try {
+        const files = await Promise.all(chosen.map(async (file) => ({
+          name: file.name, b64: await toBase64(file),
+        })));
+        const result = await api("/api/doc/index", { files });
+        let html = `Indexed <b>${result.chunks}</b> chunks from ${result.sources.length} file(s).`;
+        if (result.skipped.length) html += `<br>Skipped: ${result.skipped.map(escapeHtml).join("; ")}`;
+        show("#out", html, result.skipped.length ? "warn" : "good");
+        renderStatus({ chunks: result.chunks, sources: result.sources });
+      } catch (error) {
+        show("#out", escapeHtml(error.message), "err");
+      } finally {
+        busy(button, false);
+      }
+    };
+
+    $("#ask").onclick = async () => {
+      const question = $("#question").value.trim();
+      if (!question) return;
+      const button = $("#ask");
+      busy(button, true, "Reading…");
+      show("#out", "");
+      try {
+        const result = await api("/api/doc/ask", { question, k: Number($("#k").value) });
+        $("#out").innerHTML = `
+          <div class="answer reveal"><h3 style="margin-top:0">Answer</h3>${md(result.answer)}</div>
+          <h3 style="margin:18px 0 4px">What it read</h3>
+          <p class="tiny muted" style="margin-top:0">Every excerpt handed to the model, best
+             match first. If the answer is wrong, the fix is almost always here — bad
+             retrieval, not a bad model.</p>
+          ${result.sources.map((source) => `
+            <div class="cite"><b>[${source.n}] ${escapeHtml(source.label)}</b>
+              · similarity ${source.score.toFixed(3)}<br>
+              ${escapeHtml(source.text)}${source.text.length >= 600 ? "…" : ""}</div>`).join("")}`;
+      } catch (error) {
+        show("#out", escapeHtml(error.message), "err");
+      } finally {
+        busy(button, false);
+      }
+    };
+
+    $("#question").addEventListener("keydown", (event) => {
+      if (event.key === "Enter" && !$("#ask").disabled) $("#ask").click();
+    });
+
+    api("/api/doc/status").then(renderStatus).catch(() => {});
+  </script>
+</body>
+</html>

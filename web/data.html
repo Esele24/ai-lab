@@ -1,0 +1,161 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>02 AI Data Analysis — AI Lab</title>
+  <link rel="stylesheet" href="/app.css">
+</head>
+<body>
+  <div class="topbar">
+    <a class="brand" href="/"><span class="dot"></span> AI Lab</a>
+    <nav class="topnav"></nav>
+  </div>
+
+  <div class="wrap">
+    <div class="hero reveal">
+      <h1><span class="badge-num">02</span>AI Data Analysis</h1>
+      <p>Upload a CSV and ask in plain English. The model chooses <i>which operation</i> to
+         run; pandas computes every number; then the model writes prose around figures that
+         already exist. It never sees your rows and never runs code.</p>
+    </div>
+
+    <div class="card">
+      <h2>1 · Load a CSV</h2>
+      <div class="drop" id="drop">
+        <input type="file" id="file" accept=".csv">
+        <div style="font-size:1.6rem">⬆</div>
+        <b class="small">Drop a CSV or click</b>
+        <div class="tiny muted">Up to 200,000 rows · Excel must be saved as CSV first</div>
+      </div>
+      <div id="loaded"></div>
+    </div>
+
+    <div class="card" style="margin-top:16px">
+      <h2>2 · Ask</h2>
+      <label class="field">
+        <span>Your question</span>
+        <input type="text" id="question" placeholder="Which product category earned the most last quarter?">
+      </label>
+      <div class="row" id="suggestions"></div>
+      <button id="ask" style="margin-top:10px" disabled>Analyse</button>
+      <div id="out"></div>
+    </div>
+
+    <div class="card" style="margin-top:16px">
+      <h3>Why this does not ask the model to write pandas code</h3>
+      <p class="small">The obvious build is “have the model write pandas, then
+        <code>exec()</code> it”. That is how most demos do it, and it is two bad things at
+        once: a remote-code-execution hole, and a liar — when its own code errors the model
+        will happily state a number anyway.</p>
+      <p class="small">Here the model returns a <b>structured operation</b> under a strict
+        <code>responseSchema</code> at temperature 0 — which column, which aggregation, which
+        filters, which chart. Pandas does the arithmetic. A second call writes the sentences,
+        and is given <i>only the computed result</i>, never the raw data.</p>
+      <p class="small" style="margin-bottom:0">The consequence worth stating: the model
+        <b>cannot</b> report a total that pandas did not compute. Its worst available failure
+        is picking the wrong column — which is visible, because the chosen operation is shown
+        beside every answer.</p>
+    </div>
+  </div>
+
+  <script src="/app.js"></script>
+  <script>
+    const SUGGESTED = [
+      "How many rows are there?", "Summarise the numeric columns",
+      "What is the total by category?", "Show the trend over time",
+    ];
+
+    $("#suggestions").innerHTML = SUGGESTED.map((text) =>
+      `<button class="ghost small suggest">${escapeHtml(text)}</button>`).join("");
+    document.querySelectorAll(".suggest").forEach((button) => {
+      button.onclick = () => { $("#question").value = button.textContent; $("#ask").click(); };
+    });
+
+    dropzone($("#drop"), async ([file]) => {
+      show("#loaded", '<span class="spinner"></span> Reading…', "info");
+      try {
+        const result = await api("/api/data/load", { name: file.name, b64: await toBase64(file) });
+        const profile = result.profile;
+        $("#loaded").innerHTML = `
+          <div class="notice good"><b>${escapeHtml(result.name)}</b> —
+            ${profile.rows.toLocaleString()} rows × ${profile.columns.length} columns</div>
+          <h3 style="margin:14px 0 4px">Columns</h3>
+          ${table(profile.columns.map((column) => ({
+            column: column.name, type: column.dtype, nulls: column.nulls,
+            unique: column.unique, sample: column.samples.join(" · "),
+          })))}
+          <h3 style="margin:16px 0 4px">First rows</h3>
+          ${table(result.preview)}`;
+        $("#ask").disabled = false;
+      } catch (error) {
+        show("#loaded", escapeHtml(error.message), "err");
+      }
+    });
+
+    function renderResult(payload) {
+      const { spec, result, narrative } = payload;
+      if (result.kind === "unanswerable") {
+        return `<div class="notice warn"><b>This data cannot answer that.</b><br>
+                  ${escapeHtml(result.note)}</div>`;
+      }
+      if (result.kind === "error" || result.kind === "empty") {
+        return `<div class="notice warn">${escapeHtml(result.note)}</div>`;
+      }
+
+      let body = "";
+      if (result.kind === "scalar") {
+        body = `<div class="stat" style="margin:10px 0">
+                  <div class="v">${Number(result.value).toLocaleString(undefined, { maximumFractionDigits: 4 })}</div>
+                  <div class="l">${escapeHtml(result.label)}</div>
+                </div>`;
+      } else if (result.kind === "series") {
+        const chart = result.chart === "line"
+          ? lineChart(result.table, result.table[0] && Object.keys(result.table[0])[0], "value")
+          : barChart(result.table, Object.keys(result.table[0])[0], "value");
+        body = `<p class="tiny muted" style="margin:10px 0 4px">${escapeHtml(result.y)} by ${escapeHtml(result.x)}</p>
+                ${chart}<div style="margin-top:12px">${table(result.table)}</div>`;
+      } else if (result.kind === "table") {
+        body = table(result.table);
+      }
+
+      const filters = result.filters_applied?.length
+        ? `<br>Filters applied: <code>${result.filters_applied.map(escapeHtml).join("</code>, <code>")}</code>`
+        : "";
+
+      return `<div class="answer reveal">${md(narrative)}</div>
+        ${body}
+        <details style="margin-top:14px">
+          <summary class="small muted" style="cursor:pointer">What the model chose, and what pandas ran</summary>
+          <p class="small" style="margin:8px 0 4px">
+            Operation: <code>${escapeHtml(spec.operation)}</code> ·
+            metric: <code>${escapeHtml(spec.metric_column || "—")}</code> ·
+            aggregation: <code>${escapeHtml(spec.aggregation || "—")}</code> ·
+            group by: <code>${escapeHtml(spec.dimension_column || "—")}</code><br>
+            Rows after filters: ${result.rows_after_filters?.toLocaleString?.() ?? "—"}${filters}
+          </p>
+          <p class="small muted">Model's reasoning: ${escapeHtml(spec.reasoning || "")}</p>
+        </details>`;
+    }
+
+    $("#ask").onclick = async () => {
+      const question = $("#question").value.trim();
+      if (!question) return;
+      const button = $("#ask");
+      busy(button, true, "Analysing…");
+      show("#out", "");
+      try {
+        $("#out").innerHTML = renderResult(await api("/api/data/ask", { question }));
+      } catch (error) {
+        show("#out", escapeHtml(error.message), "err");
+      } finally {
+        busy(button, false);
+      }
+    };
+
+    $("#question").addEventListener("keydown", (event) => {
+      if (event.key === "Enter" && !$("#ask").disabled) $("#ask").click();
+    });
+  </script>
+</body>
+</html>

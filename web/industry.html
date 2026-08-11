@@ -1,0 +1,170 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>06 Industry-Specific AI Helper — AI Lab</title>
+  <link rel="stylesheet" href="/app.css">
+</head>
+<body>
+  <div class="topbar">
+    <a class="brand" href="/"><span class="dot"></span> AI Lab</a>
+    <nav class="topnav"></nav>
+  </div>
+
+  <div class="wrap">
+    <div class="hero reveal">
+      <h1><span class="badge-num">06</span>Industry-Specific AI Helper</h1>
+      <p>Review a document against the clauses that industry expects to see — so it can
+         report what is <i>missing</i>. That is the finding a general chatbot structurally
+         cannot make, because it only reacts to text that is there.</p>
+    </div>
+
+    <div class="grid" style="grid-template-columns:minmax(0,1fr) minmax(0,300px)">
+      <div>
+        <div class="card">
+          <h2>Review a document</h2>
+          <label class="field"><span>Industry</span><select id="industry"></select></label>
+          <div class="drop" id="drop" style="padding:16px">
+            <input type="file" id="file" accept=".pdf,.docx,.txt,.md">
+            <b class="small">Drop a contract or click</b>
+            <div class="tiny muted">PDF · DOCX · TXT — or paste the text below</div>
+          </div>
+          <label class="field" style="margin-top:12px">
+            <span>Or paste the text</span>
+            <textarea id="text" style="min-height:150px" placeholder="Paste the agreement here…"></textarea>
+          </label>
+          <button id="review">Review</button>
+          <div id="out"></div>
+        </div>
+      </div>
+
+      <div>
+        <div class="card">
+          <h3>Checklist</h3>
+          <p class="tiny muted" style="margin-top:0">Every item is assessed, including the ones
+            the document does not mention.</p>
+          <div id="checklist"></div>
+        </div>
+        <div class="card" style="margin-top:16px">
+          <h3>Three guarantees</h3>
+          <ol class="tiny muted" style="padding-left:18px;margin-bottom:0">
+            <li><b>temperature 0</b> — the same document gives the same review.</li>
+            <li><b>Strict response schema</b> — output is a shape, not prose to parse.</li>
+            <li><b>Quote verification</b> — after the model answers, every finding's quote is
+              checked against the actual document text. Anything it cannot show is
+              <b>dropped or demoted to ABSENT</b> before it reaches this screen. A finding
+              citing a clause the document does not contain is worse than no finding: it is
+              the one you would act on.</li>
+          </ol>
+        </div>
+        <div class="card" style="margin-top:16px">
+          <h3>What this is not</h3>
+          <p class="tiny muted" style="margin-bottom:0">It is not legal advice, and it does not
+            replace a lawyer reading the contract. It is a first pass that tells you which
+            clauses to go and look at — the value is in the ABSENT rows.</p>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script src="/app.js"></script>
+  <script>
+    let industries = {};
+    let uploaded = null;
+
+    (async () => {
+      const data = await api("/api/industry/list");
+      industries = data.industries;
+      $("#industry").innerHTML = Object.keys(industries)
+        .map((name) => `<option>${escapeHtml(name)}</option>`).join("");
+      renderChecklist();
+    })();
+
+    function renderChecklist() {
+      const items = industries[$("#industry").value] || [];
+      $("#checklist").innerHTML = `<ul class="tiny" style="padding-left:18px;margin:0">${
+        items.map((item) => `<li>${escapeHtml(item)}</li>`).join("")}</ul>`;
+    }
+    $("#industry").onchange = renderChecklist;
+
+    dropzone($("#drop"), async ([file]) => {
+      uploaded = { name: file.name, b64: await toBase64(file) };
+      $("#drop").innerHTML = `<b class="small">${escapeHtml(file.name)}</b>
+        <div class="tiny muted">${(file.size / 1024).toFixed(0)} KB — ready to review</div>`;
+    });
+
+    const SEVERITY = { HIGH: "bad", MEDIUM: "warn", LOW: "ok" };
+    const STATUS = { PRESENT: "ok", WEAK: "warn", ABSENT: "bad" };
+
+    $("#review").onclick = async () => {
+      const button = $("#review");
+      const text = $("#text").value.trim();
+      if (!uploaded && text.length < 200) {
+        show("#out", "Upload a document, or paste at least 200 characters of text.", "warn");
+        return;
+      }
+      busy(button, true, "Reviewing…");
+      show("#out", "");
+      try {
+        const payload = { industry: $("#industry").value };
+        if (uploaded) payload.file = uploaded; else payload.text = text;
+        const result = await api("/api/industry/review", payload);
+
+        const order = { ABSENT: 0, WEAK: 1, PRESENT: 2 };
+        const rank = { HIGH: 0, MEDIUM: 1, LOW: 2 };
+        const findings = [...result.findings].sort((a, b) =>
+          (order[a.status] - order[b.status]) || (rank[a.severity] - rank[b.severity]));
+        const counts = findings.reduce((acc, finding) => {
+          acc[finding.status] = (acc[finding.status] || 0) + 1; return acc;
+        }, {});
+
+        $("#out").innerHTML = `
+          <div class="answer reveal" style="margin-top:14px">
+            <p style="margin-top:0"><b>${escapeHtml(result.document_type)}</b>
+              ${result.parties.length ? " — " + result.parties.map(escapeHtml).join(" and ") : ""}</p>
+            ${md(result.summary)}
+            <div class="row" style="margin-top:8px">
+              <span class="pill bad">${counts.ABSENT || 0} ABSENT</span>
+              <span class="pill warn">${counts.WEAK || 0} WEAK</span>
+              <span class="pill ok">${counts.PRESENT || 0} PRESENT</span>
+              <span class="tiny muted">of ${result.checklist_size} checklist items</span>
+            </div>
+          </div>
+
+          ${result.truncated ? '<div class="notice warn">The document was longer than 120,000 characters and was truncated. Only the first part was reviewed.</div>' : ""}
+          ${result.dropped_findings.length ? `<div class="notice warn"><b>${result.dropped_findings.length}
+            finding(s) were dropped</b> because the quote could not be found in the document —
+            the model produced them, the verification step rejected them:<br>
+            ${result.dropped_findings.map(escapeHtml).join("<br>")}</div>` : ""}
+
+          <h3 style="margin:18px 0 6px">Findings</h3>
+          ${findings.map((finding) => `
+            <div class="card reveal" style="margin-bottom:10px">
+              <div class="row" style="justify-content:space-between">
+                <b>${escapeHtml(finding.clause)}</b>
+                <span>
+                  <span class="pill ${STATUS[finding.status]}">${finding.status}</span>
+                  <span class="pill ${SEVERITY[finding.severity]}">${finding.severity}</span>
+                </span>
+              </div>
+              ${finding.quote ? `<div class="cite" style="margin-top:8px">${escapeHtml(finding.quote)}</div>` : ""}
+              <p class="small" style="margin:8px 0 4px">${escapeHtml(finding.concern)}</p>
+              <p class="small" style="margin:0"><b>Ask for:</b> ${escapeHtml(finding.recommendation)}</p>
+            </div>`).join("")}
+
+          ${result.obligations.length ? `
+            <h3 style="margin:18px 0 6px">Obligations</h3>
+            ${table(result.obligations.map((obligation) => ({
+              party: obligation.party, obligation: obligation.obligation,
+              deadline: obligation.deadline || "none stated",
+            })))}` : ""}`;
+      } catch (error) {
+        show("#out", escapeHtml(error.message), "err");
+      } finally {
+        busy(button, false);
+      }
+    };
+  </script>
+</body>
+</html>

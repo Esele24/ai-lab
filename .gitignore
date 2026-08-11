@@ -1,0 +1,16 @@
+# The real API key lives here. Never commit it.
+.env
+
+__pycache__/
+*.pyc
+
+# Runtime artefacts — regenerate with `python train_model.py` and by re-indexing.
+data/ai_lab.db
+data/doc_index/
+data/SMSSpamCollection
+data/readme
+model/spam_model.npz
+model/spam_vocab.json
+
+# spam_report.json is deliberately NOT ignored: the metrics on the project 03 page
+# are read from it, so the page is blank without it.

@@ -1,0 +1,252 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>05 Smarter Prompt System — AI Lab</title>
+  <link rel="stylesheet" href="/app.css">
+</head>
+<body>
+  <div class="topbar">
+    <a class="brand" href="/"><span class="dot"></span> AI Lab</a>
+    <nav class="topnav"></nav>
+  </div>
+
+  <div class="wrap">
+    <div class="hero reveal">
+      <h1><span class="badge-num">05</span>Smarter Prompt System</h1>
+      <p>Build a prompt, save it to a library with its placeholders, then put two prompts
+         against each other and score them. The scoring is the only hard part, and the reason
+         is on the page.</p>
+    </div>
+
+    <div class="grid" style="grid-template-columns:minmax(0,1.4fr) minmax(0,1fr)">
+      <div>
+        <div class="card">
+          <h2>Build</h2>
+          <div class="grid g3">
+            <label class="field"><span>Task</span><select id="task"></select></label>
+            <label class="field"><span>Tone</span><select id="tone"></select></label>
+            <label class="field"><span>Output format</span><select id="format"></select></label>
+          </div>
+          <label class="field">
+            <span>What do you want it to do?</span>
+            <textarea id="details" placeholder="Write a first outreach message to a Port Harcourt law firm with no website. Short. Ends with a question."></textarea>
+          </label>
+          <button id="build">Generate prompt</button>
+          <div id="built"></div>
+        </div>
+
+        <div class="card" style="margin-top:16px">
+          <h2>A/B test two prompts</h2>
+          <div class="grid g2">
+            <label class="field"><span>Prompt A</span><textarea id="pa"></textarea></label>
+            <label class="field"><span>Prompt B</span><textarea id="pb"></textarea></label>
+          </div>
+          <label class="field">
+            <span>Test input (optional — appended to both)</span>
+            <textarea id="test" style="min-height:60px"></textarea>
+          </label>
+          <button id="compare">Run both and score</button>
+          <div id="cmp"></div>
+        </div>
+
+        <div class="card" style="margin-top:16px">
+          <h3>Why the A/B test shuffles the order</h3>
+          <p class="small">A model asked to judge two outputs has two measurable biases: it
+            prefers the <b>longer</b> answer, and it prefers whichever it was shown
+            <b>first</b>. A naive comparison inherits both and calls it a result.</p>
+          <p class="small">So this one shuffles which real output is labelled "A" before the
+            judge sees them, scores against four named criteria instead of "which is better",
+            and prints each output's <b>word count beside its score</b> — so you can see for
+            yourself when a win is really just verbosity.</p>
+          <p class="small" style="margin-bottom:0">Even with that, a judge is a filter, not a
+            verdict. Read the outputs.</p>
+        </div>
+      </div>
+
+      <div>
+        <div class="card">
+          <h3>Library</h3>
+          <label class="field">
+            <span>Filter</span>
+            <select id="filter"><option>All</option></select>
+          </label>
+          <div id="library"></div>
+        </div>
+
+        <div class="card" style="margin-top:16px">
+          <h3>Fill placeholders</h3>
+          <p class="tiny muted" style="margin-top:0">Unfilled placeholders are reported rather
+            than silently left in the text. A prompt sent with a literal
+            <code>{product_name}</code> still in it is the commonest way a tool like this
+            wastes a call.</p>
+          <div id="filler"><p class="small muted">Pick a prompt from the library.</p></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script src="/app.js"></script>
+  <script>
+    let current = null;
+
+    function fillOptions(select, values) {
+      select.innerHTML = values.map((value) => `<option>${escapeHtml(value)}</option>`).join("");
+    }
+
+    async function refresh() {
+      const data = await api("/api/prompt/list");
+      fillOptions($("#task"), data.categories);
+      fillOptions($("#tone"), data.tones);
+      fillOptions($("#format"), data.formats);
+      $("#filter").innerHTML = '<option>All</option>' +
+        data.categories.map((category) => `<option>${escapeHtml(category)}</option>`).join("");
+
+      const chosen = $("#filter").value || "All";
+      const rows = data.prompts.filter((prompt) => chosen === "All" || prompt.category === chosen);
+      $("#library").innerHTML = rows.length ? rows.map((prompt) => `
+        <div class="cite" style="border-left-color:${prompt.favourite ? "var(--warn)" : "var(--accent)"}">
+          <div class="row" style="justify-content:space-between">
+            <b>${prompt.favourite ? "★ " : ""}${escapeHtml(prompt.name)}</b>
+            <span class="tiny muted">${escapeHtml(prompt.category)}</span>
+          </div>
+          <p class="tiny muted" style="margin:4px 0">${escapeHtml(prompt.body.slice(0, 110))}…</p>
+          ${prompt.variables.length ? `<p class="tiny">Placeholders: <code>${prompt.variables.map(escapeHtml).join("</code> <code>")}</code></p>` : ""}
+          <div class="row">
+            <button class="ghost small use" data-id="${prompt.id}">Use</button>
+            <button class="ghost small toA" data-id="${prompt.id}">→ A</button>
+            <button class="ghost small toB" data-id="${prompt.id}">→ B</button>
+            <button class="ghost small fav" data-id="${prompt.id}">${prompt.favourite ? "Unstar" : "Star"}</button>
+            <button class="ghost small del" data-id="${prompt.id}">Delete</button>
+          </div>
+        </div>`).join("") : '<p class="small muted">Empty. Build one and save it.</p>';
+
+      const byId = Object.fromEntries(data.prompts.map((prompt) => [prompt.id, prompt]));
+      document.querySelectorAll(".use").forEach((button) =>
+        button.onclick = () => openFiller(byId[button.dataset.id]));
+      document.querySelectorAll(".toA").forEach((button) =>
+        button.onclick = () => { $("#pa").value = byId[button.dataset.id].body; });
+      document.querySelectorAll(".toB").forEach((button) =>
+        button.onclick = () => { $("#pb").value = byId[button.dataset.id].body; });
+      document.querySelectorAll(".fav").forEach((button) =>
+        button.onclick = async () => { await api("/api/prompt/favourite", { id: button.dataset.id }); refresh(); });
+      document.querySelectorAll(".del").forEach((button) =>
+        button.onclick = async () => { await api("/api/prompt/delete", { id: button.dataset.id }); refresh(); });
+    }
+
+    function openFiller(prompt) {
+      current = prompt;
+      if (!prompt.variables.length) {
+        $("#filler").innerHTML = `<p class="small">"${escapeHtml(prompt.name)}" has no placeholders.</p>
+          <pre>${escapeHtml(prompt.body)}</pre>`;
+        return;
+      }
+      $("#filler").innerHTML = `<p class="small"><b>${escapeHtml(prompt.name)}</b></p>` +
+        prompt.variables.map((variable) => `
+          <label class="field"><span>${escapeHtml(variable)}</span>
+            <input type="text" class="var" data-name="${escapeHtml(variable)}"></label>`).join("") +
+        `<button id="dofill" class="small">Fill</button><div id="filled"></div>`;
+      $("#dofill").onclick = async () => {
+        const values = {};
+        document.querySelectorAll(".var").forEach((input) => values[input.dataset.name] = input.value);
+        const result = await api("/api/prompt/fill", { template: current.body, values });
+        $("#filled").innerHTML = (result.missing.length
+          ? `<div class="notice warn">Still unfilled: <code>${result.missing.map(escapeHtml).join("</code> <code>")}</code></div>` : "")
+          + `<pre>${escapeHtml(result.filled)}</pre>`;
+      };
+    }
+
+    $("#filter").onchange = refresh;
+
+    $("#build").onclick = async () => {
+      const details = $("#details").value.trim();
+      if (!details) { show("#built", "Describe what you want it to do first.", "warn"); return; }
+      const button = $("#build");
+      busy(button, true, "Writing…");
+      try {
+        const result = await api("/api/prompt/build", {
+          task: $("#task").value, details, tone: $("#tone").value, format: $("#format").value,
+        });
+        $("#built").innerHTML = `
+          <div class="answer reveal" style="margin-top:14px">
+            <pre style="background:var(--surface);margin:0">${escapeHtml(result.prompt)}</pre>
+            ${result.variables.length ? `<p class="tiny" style="margin:10px 0 0">Placeholders:
+              <code>${result.variables.map(escapeHtml).join("</code> <code>")}</code></p>` : ""}
+            <p class="tiny muted" style="margin:6px 0 0">${escapeHtml(result.notes)}</p>
+          </div>
+          <div class="row" style="margin-top:10px">
+            <input type="text" id="name" placeholder="Name it to save" style="flex:1;min-width:170px">
+            <button id="save" class="small">Save to library</button>
+            <button id="sendA" class="ghost small">→ Prompt A</button>
+            <button id="sendB" class="ghost small">→ Prompt B</button>
+          </div>
+          <div id="saved"></div>`;
+        $("#sendA").onclick = () => { $("#pa").value = result.prompt; };
+        $("#sendB").onclick = () => { $("#pb").value = result.prompt; };
+        $("#save").onclick = async () => {
+          const name = $("#name").value.trim();
+          if (!name) { show("#saved", "Give it a name.", "warn"); return; }
+          try {
+            await api("/api/prompt/save", {
+              name, category: $("#task").value, tone: $("#tone").value, body: result.prompt,
+            });
+            show("#saved", `Saved as "${escapeHtml(name)}".`, "good");
+            refresh();
+          } catch (error) { show("#saved", escapeHtml(error.message), "err"); }
+        };
+      } catch (error) {
+        show("#built", escapeHtml(error.message), "err");
+      } finally {
+        busy(button, false);
+      }
+    };
+
+    $("#compare").onclick = async () => {
+      const button = $("#compare");
+      busy(button, true, "Running both…");
+      show("#cmp", "");
+      try {
+        const result = await api("/api/prompt/compare", {
+          prompt_a: $("#pa").value, prompt_b: $("#pb").value, test_input: $("#test").value,
+        });
+        const scores = Object.fromEntries(result.verdict.scores.map((score) => [score.label, score]));
+        const card = (label, output, words) => {
+          const score = scores[label] || {};
+          const won = result.verdict.winner === label;
+          return `<div class="card" style="border-color:${won ? "var(--good)" : "var(--border)"}">
+            <div class="row" style="justify-content:space-between">
+              <b>Prompt ${label}</b>
+              <span class="pill ${won ? "ok" : "warn"}">${won ? "WINNER" : "scored"} ${score.total ?? "—"}/100</span>
+            </div>
+            <p class="tiny muted" style="margin:6px 0">${words} words ·
+              following ${score.instruction_following ?? "—"}/25 ·
+              specific ${score.specificity ?? "—"}/25 ·
+              useful ${score.usefulness ?? "—"}/25 ·
+              concise ${score.conciseness ?? "—"}/25</p>
+            <p class="tiny">${escapeHtml(score.comment || "")}</p>
+            <details><summary class="tiny muted" style="cursor:pointer">Show the output</summary>
+              <pre style="margin-top:8px">${escapeHtml(output)}</pre></details>
+          </div>`;
+        };
+        $("#cmp").innerHTML = `
+          <div class="notice ${result.verdict.winner === "tie" ? "info" : "good"}" style="margin-top:14px">
+            <b>${result.verdict.winner === "tie" ? "Too close to call" : "Prompt " + result.verdict.winner + " wins"}</b>
+            — ${escapeHtml(result.verdict.reason)}
+          </div>
+          <div class="grid g2">${card("A", result.output_a, result.words_a)}${card("B", result.output_b, result.words_b)}</div>
+          <p class="tiny muted">The judge saw them ${result.judge_saw_swapped ? "<b>swapped</b>" : "in order"} this
+            run — the shuffle is random per comparison, so position bias does not
+            systematically favour one side. Run it twice; if the winner flips, the difference
+            was noise.</p>`;
+      } catch (error) {
+        show("#cmp", escapeHtml(error.message), "err");
+      } finally {
+        busy(button, false);
+      }
+    };
+
+    refresh();
+  </script>
+</body>
+</html>

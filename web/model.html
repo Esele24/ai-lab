@@ -1,0 +1,187 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>03 Custom Trained Model — AI Lab</title>
+  <link rel="stylesheet" href="/app.css">
+</head>
+<body>
+  <div class="topbar">
+    <a class="brand" href="/"><span class="dot"></span> AI Lab</a>
+    <nav class="topnav"></nav>
+  </div>
+
+  <div class="wrap">
+    <div class="hero reveal">
+      <h1><span class="badge-num">03</span>Custom Trained Model</h1>
+      <p>Not an API call. TF-IDF and logistic regression written out in numpy and trained on
+         5,574 real hand-labelled SMS messages, on this laptop, with the test set held out
+         before a single weight was updated.</p>
+    </div>
+
+    <div id="state"></div>
+
+    <div class="grid g4" id="metrics"></div>
+
+    <div class="card" style="margin-top:16px">
+      <h2>Try it</h2>
+      <label class="field">
+        <span>A message to classify</span>
+        <textarea id="text" placeholder="URGENT! You have won a 1 week FREE membership. Text CLAIM to 81010 now"></textarea>
+      </label>
+      <div class="row">
+        <button id="predict">Classify</button>
+        <label class="small muted">Decision threshold
+          <input type="number" id="threshold" value="0.5" min="0.05" max="0.95" step="0.05"
+                 style="width:74px;display:inline-block;margin-left:6px">
+        </label>
+        <span class="tiny muted">Lower it to catch more spam and accept more false alarms.</span>
+      </div>
+      <div class="row" style="margin-top:10px" id="examples"></div>
+      <div id="out"></div>
+    </div>
+
+    <div class="grid g2" style="margin-top:16px">
+      <div class="card">
+        <h3>Training curve</h3>
+        <p class="tiny muted" style="margin-top:0">Validation accuracy per epoch, from the
+          real training run recorded in <code>model/spam_report.json</code>.</p>
+        <div id="curve"></div>
+      </div>
+      <div class="card">
+        <h3>What it learned</h3>
+        <p class="tiny muted" style="margin-top:0">The highest and lowest weights. This is the
+          check that catches a model that scored well for the wrong reason.</p>
+        <div id="features"></div>
+      </div>
+    </div>
+
+    <div class="card" style="margin-top:16px">
+      <h3>The two things that actually moved the numbers</h3>
+      <p class="small"><b>1 · Feature engineering.</b> Every phone number in the dataset is a
+        token seen once, so it gets pruned and the model learns nothing from it. Collapsing
+        all of them into a single <code>__num__</code> symbol — and all links into
+        <code>__url__</code> — gives the model a feature it can learn. Those two hand-made
+        tokens came out as the <b>top two spam indicators</b>. A library cannot do this for
+        you; it depends on the data.</p>
+      <p class="small"><b>2 · Class weighting.</b> Only 13.4% of the dataset is spam, so an
+        unweighted model minimises loss fastest by leaning towards "ham". That looks fine as
+        accuracy and terrible as recall: the first run scored <b>96.95% accuracy but only
+        76.64% recall</b> — it was missing a quarter of real spam. Weighting each spam example
+        by <code>n_ham / n_spam</code> makes a missed spam cost as much as a false alarm, and
+        recall went to <b>97.08%</b>.</p>
+      <p class="small" style="margin-bottom:0"><b>Why the baseline is on the page.</b> Always
+        predicting "ham" scores 87.71% on this test set. Any accuracy figure quoted without
+        that number beside it is not telling you anything.</p>
+    </div>
+
+    <div class="card" style="margin-top:16px">
+      <h3>Retrain it</h3>
+      <pre>cd "CLAUDE\ai-lab"
+python train_model.py</pre>
+      <p class="tiny muted" style="margin-bottom:0">Takes about a minute. Downloads the dataset
+        on first run. Everything on this page is read back from what that command wrote.</p>
+    </div>
+  </div>
+
+  <script src="/app.js"></script>
+  <script>
+    const EXAMPLES = [
+      "URGENT! You have won a 1 week FREE membership. Text CLAIM to 81010 now",
+      "Hey, are we still meeting at 4 or should I come earlier?",
+      "Congratulations! Claim your prize at http://bit.ly/win now, reply STOP to opt out",
+      "Please print the attendance sheet before the morning meeting",
+    ];
+
+    $("#examples").innerHTML = EXAMPLES.map((text, index) =>
+      `<button class="ghost small ex" data-i="${index}">Example ${index + 1}</button>`).join("");
+    document.querySelectorAll(".ex").forEach((button) => {
+      button.onclick = () => { $("#text").value = EXAMPLES[button.dataset.i]; $("#predict").click(); };
+    });
+
+    (async () => {
+      let data;
+      try { data = await api("/api/model/report"); }
+      catch (error) { show("#state", escapeHtml(error.message), "err"); return; }
+
+      if (!data.trained) {
+        show("#state", `The model has not been trained yet. Run <code>python train_model.py</code> once — it takes about a minute.`, "warn");
+        $("#predict").disabled = true;
+        return;
+      }
+
+      const report = data.report;
+      const metrics = report.metrics;
+      const cells = [
+        ["Accuracy", (metrics.accuracy * 100).toFixed(2) + "%"],
+        ["Precision", (metrics.precision * 100).toFixed(2) + "%"],
+        ["Recall", (metrics.recall * 100).toFixed(2) + "%"],
+        ["F1 score", (metrics.f1 * 100).toFixed(2) + "%"],
+        ["Baseline", (report.majority_baseline_accuracy * 100).toFixed(2) + "%"],
+        ["Test messages", report.test_size.toLocaleString()],
+        ["Features", report.features.toLocaleString()],
+        ["Epochs", report.epochs.toLocaleString()],
+      ];
+      $("#metrics").innerHTML = cells.map(([label, value]) => `
+        <div class="card stat reveal"><div class="v">${value}</div><div class="l">${label}</div></div>`).join("");
+
+      show("#state", `Trained on the <a href="${report.dataset_url}" target="_blank" rel="noopener">${escapeHtml(report.dataset)}</a> —
+        ${report.total_messages.toLocaleString()} real messages, ${(report.spam_share * 100).toFixed(1)}% spam.
+        ${report.train_size.toLocaleString()} used for training, ${report.test_size.toLocaleString()} held out and never seen during training.
+        Confusion on the held-out set: <b>${metrics.true_positive}</b> spam caught,
+        <b>${metrics.false_negative}</b> spam missed,
+        <b>${metrics.false_positive}</b> false alarms,
+        <b>${metrics.true_negative}</b> correct ham.`, "good");
+
+      const history = report.history.filter((_, index) => index % 4 === 0);
+      $("#curve").innerHTML = lineChart(
+        history.map((entry) => ({ epoch: "epoch " + entry.epoch, value: (entry.val_accuracy * 100).toFixed(2) })),
+        "epoch", "value");
+
+      $("#features").innerHTML = `
+        <p class="small" style="margin:6px 0 4px"><b>Pushes towards spam</b></p>
+        ${barChart(report.spam_indicators.slice(0, 8).map(([token, weight]) => ({ token, weight })), "token", "weight")}
+        <p class="small" style="margin:14px 0 4px"><b>Pushes towards ham</b></p>
+        ${barChart(report.ham_indicators.slice(0, 8).map(([token, weight]) => ({ token, weight: Math.abs(weight) })), "token", "weight")}`;
+    })();
+
+    $("#predict").onclick = async () => {
+      const text = $("#text").value.trim();
+      if (!text) return;
+      const button = $("#predict");
+      busy(button, true, "Classifying…");
+      try {
+        const result = await api("/api/model/predict", { text, threshold: Number($("#threshold").value) });
+        const spam = result.label === "spam";
+        $("#out").innerHTML = `
+          <div class="answer reveal">
+            <div class="row" style="justify-content:space-between">
+              <span class="pill ${spam ? "bad" : "ok"}">${spam ? "SPAM" : "HAM (legitimate)"}</span>
+              <b>p(spam) = ${(result.probability * 100).toFixed(2)}%</b>
+            </div>
+            <div class="bar-track" style="margin-top:10px;height:14px">
+              <div class="bar-fill" style="width:${result.probability * 100}%"></div>
+            </div>
+            <p class="tiny muted" style="margin-bottom:0">Threshold ${result.threshold}. The
+              model outputs a probability; the label is a decision you make on top of it.</p>
+          </div>
+          <h3 style="margin:16px 0 4px">Why</h3>
+          <p class="tiny muted" style="margin-top:0">Each token's TF-IDF value times its learned
+            weight. Positive pushes towards spam. This is the whole decision — there is
+            nothing hidden behind it.</p>
+          ${table(result.drivers.map((driver) => ({
+            token: driver.token, weight: driver.weight, contribution: driver.contribution,
+            pushes: driver.contribution > 0 ? "towards spam" : "towards ham",
+          })))}
+          ${result.unknown_tokens.length ? `<p class="tiny muted">Not in the ${result.vocabulary_size.toLocaleString()}-word vocabulary, so ignored entirely:
+            <code>${result.unknown_tokens.map(escapeHtml).join("</code> <code>")}</code></p>` : ""}`;
+      } catch (error) {
+        show("#out", escapeHtml(error.message), "err");
+      } finally {
+        busy(button, false);
+      }
+    };
+  </script>
+</body>
+</html>
