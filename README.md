@@ -18,6 +18,18 @@ python train_model.py     # trains project 03. ~1 minute. Only needed once.
 python server.py          # then open http://localhost:8000
 ```
 
+### Two front ends
+
+There are two, both working, and they talk to this same backend:
+
+| | Where | How to run |
+|---|---|---|
+| **Next.js 16 + Tailwind v4** — matches the rest of the portfolio | [`../ai-lab-web`](../ai-lab-web) | `npm run dev` (with `server.py` running), then port 3000 |
+| **Vanilla HTML/CSS/JS** — zero dependencies, served by `server.py` itself | `web/` | nothing extra; it is on port 8000 |
+
+The Next.js one is the deployable, better-looking one. The vanilla one still works and is
+the fallback that needs no Node at all. Deployment: [DEPLOY.md](DEPLOY.md).
+
 Verify everything at once (**makes ~20 model calls — this alone exhausts the free tier**):
 
 ```powershell
@@ -266,10 +278,15 @@ The one logged failure in the activity log is intentional: the test that confirm
 
 ## Not done
 
-- **No deployment.** Everything runs on `localhost`. Render's free tier would host this
-  (it is a plain Python server), but the model rate limit makes a public URL a bad idea
-  before the quota question is settled.
+- **Not deployed yet — blocked on three logins, not on code.** The Vercel CLI is not
+  authenticated, there is no Render account, and there is no git repo. Everything code-side
+  is ready and tested: `PORT`/`HOST` from the environment, `requirements.txt`,
+  `render.yaml` with training in the build step, and per-IP rate limiting. Exact steps and
+  the four free-tier gotchas: [DEPLOY.md](DEPLOY.md).
 - **Single-user.** The loaded dataframe and vector index are in-process, so two people
   hitting it at once would share state. The document index and database are on disk;
   the dataframe is not.
-- **No auth.** It binds to `127.0.0.1` only.
+- **No auth.** Locally it binds `127.0.0.1`. Deployed, the only protection is the rate
+  limit — **30 AI requests per hour per IP** (`RATE_LIMIT_PER_HOUR`), which exists because
+  a public URL plus a live API key plus a ~20-request free quota means one stranger with a
+  loop can spend the whole day's allowance. ✅ Verified with `test_ratelimit.py`.

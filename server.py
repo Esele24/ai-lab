@@ -46,6 +46,40 @@ MIME = {
 STATE: dict[str, Any] = {"index": None, "frame": None, "frame_name": None, "model": None}
 
 
+# --- rate limiting ---------------------------------------------------------
+# The moment this server has a public URL, the free-tier Gemini quota (~20
+# requests) becomes something a stranger can exhaust in one loop, and the doc
+# uploader accepts 30 MB bodies. So the routes that cost money are capped per IP.
+#
+# A deque of timestamps per IP, not a counter: a counter cannot expire, so a
+# counter-based limiter either never resets or resets everyone at once.
+MODEL_ROUTES = {
+    "/api/doc/index", "/api/doc/ask", "/api/data/ask", "/api/prompt/build",
+    "/api/prompt/compare", "/api/industry/review", "/api/voice/turn",
+}
+RATE_WINDOW = 3600            # seconds
+RATE_LIMIT = int(os.environ.get("RATE_LIMIT_PER_HOUR", "30"))
+_hits: dict[str, deque[float]] = {}
+_hits_lock = threading.Lock()
+
+
+def rate_limited(client: str) -> tuple[bool, int]:
+    """Returns (blocked, seconds_until_a_slot_frees)."""
+    now = time.time()
+    with _hits_lock:
+        window = _hits.setdefault(client, deque())
+        while window and now - window[0] > RATE_WINDOW:
+            window.popleft()
+        if len(window) >= RATE_LIMIT:
+            return True, int(RATE_WINDOW - (now - window[0])) + 1
+        window.append(now)
+        # Keep the dict from growing without bound behind a long-running process.
+        if len(_hits) > 2000:
+            for key in [k for k, v in _hits.items() if not v]:
+                del _hits[key]
+        return False, 0
+
+
 def load_doc_index() -> VectorIndex | None:
     if STATE["index"] is None and (INDEX_DIR / "vectors.npy").exists():
         STATE["index"] = VectorIndex.load(INDEX_DIR)
@@ -401,6 +435,29 @@ class Handler(BaseHTTPRequestHandler):
         except json.JSONDecodeError:
             self._json(400, {"error": "Body was not valid JSON."})
             return
+
+        if path in MODEL_ROUTES:
+            # Behind a proxy (Vercel rewrite -> Render) every request arrives from the
+            # proxy's IP, so the real client is in X-Forwarded-For. Take the FIRST
+            # entry: later ones are appended by intermediaries and the last is the
+            # proxy itself. Falls back to the socket address when running locally.
+            forwarded = self.headers.get("X-Forwarded-For", "")
+            client = forwarded.split(",")[0].strip() or self.client_address[0]
+            blocked, retry_after = rate_limited(client)
+            if blocked:
+                self.send_response(429)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Retry-After", str(retry_after))
+                body = json.dumps({
+                    "error": f"Rate limit reached ({RATE_LIMIT} AI requests per hour). "
+                             f"Try again in about {retry_after // 60 + 1} minute(s). "
+                             "This cap exists because the model runs on a small free tier."
+                }).encode()
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+                return
+
         self._dispatch(path, payload)
 
     def _dispatch(self, path: str, payload: dict) -> None:
@@ -415,13 +472,21 @@ class Handler(BaseHTTPRequestHandler):
             self._json(500, {"error": f"{type(exc).__name__}: {exc}"})
 
 
-def main(port: int = 8000) -> None:
+def main() -> None:
+    # Render (and every other PaaS) assigns the port and requires binding 0.0.0.0.
+    # Locally the default stays 127.0.0.1, so the dev server is not reachable from
+    # the network just because you ran it.
+    port = int(os.environ.get("PORT", "8000"))
+    host = os.environ.get("HOST", "127.0.0.1")
+
     if not config.has_key():
         print("WARNING: no GEMINI_API_KEY in .env — six of the seven tools will fail.")
     if not (config.MODEL_DIR / "spam_model.npz").exists():
         print("NOTE: classifier not trained yet. Run `python train_model.py` for project 03.")
-    print(f"AI Lab on http://localhost:{port}   (Ctrl+C to stop)")
-    ThreadingHTTPServer(("127.0.0.1", port), Handler).serve_forever()
+        print("      On a fresh deploy this must run in the build step, or project 03 is blank.")
+    print(f"AI Lab on http://{host}:{port}   (Ctrl+C to stop)")
+    print(f"Rate limit: {RATE_LIMIT} AI requests per hour per IP.")
+    ThreadingHTTPServer((host, port), Handler).serve_forever()
 
 
 if __name__ == "__main__":

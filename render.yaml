@@ -1,0 +1,42 @@
+# Render blueprint for the AI Lab backend.
+#
+# Render reads this from the repo root of whatever you point it at, so this file
+# must sit beside server.py. Create the service from the Render dashboard with
+# "New > Blueprint" and select the repo.
+services:
+  - type: web
+    name: ai-lab-backend
+    runtime: python
+    plan: free
+    # Training must happen in the BUILD step, not at request time. A cold request
+    # that trains for a minute would time out, and project 03's page reads
+    # model/spam_report.json — without this it renders "not trained".
+    buildCommand: pip install -r requirements.txt && python train_model.py
+    startCommand: python server.py
+    envVars:
+      # HOST must be 0.0.0.0 or Render cannot route to the process. PORT is
+      # injected by Render automatically; server.py reads both from the environment.
+      - key: HOST
+        value: 0.0.0.0
+      - key: PYTHON_VERSION
+        value: "3.13.4"
+      # Set this in the Render dashboard, NOT here. Never commit the key.
+      - key: GEMINI_API_KEY
+        sync: false
+      - key: GEMINI_MODEL
+        value: gemini-2.5-flash
+      - key: EMBED_MODEL
+        value: gemini-embedding-001
+      - key: RATE_LIMIT_PER_HOUR
+        value: "30"
+
+# ⚠️ TWO THINGS ABOUT THE FREE PLAN THAT WILL LOOK LIKE BUGS
+#
+# 1. The instance sleeps after ~15 minutes idle and takes 30-60 seconds to wake.
+#    The first request after a quiet spell will appear to hang. If you put this
+#    URL in a LinkedIn post, expect the first visitor of the hour to wait.
+#
+# 2. The filesystem is EPHEMERAL. data/ai_lab.db and data/doc_index/ are wiped on
+#    every deploy and every restart. So the activity log, the saved prompts and the
+#    voice bookings all reset. That is acceptable for a demo and unacceptable for a
+#    product — the fix is a real database, and core/store.py is the seam for it.
