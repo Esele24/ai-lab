@@ -1,8 +1,10 @@
 # Shipping AI Lab — what is done, and the three logins that are not
 
-**Status 2026-08-11:** the code is deployment-ready and verified locally. Deployment
-itself is blocked on credentials only you can supply. Nothing below is guesswork — the
-code changes it needs are already made and tested.
+**Status 2026-08-11:** the code is deployment-ready, verified locally, and **pushed**.
+What remains is two browser logins only you can do — Vercel and Render. Nothing below is
+guesswork; every code change it needs is already made, tested and committed.
+
+**Shortest path when you're back: Step 2, then Step 3, then Step 4. About 20 minutes.**
 
 ---
 
@@ -29,27 +31,37 @@ backend URL never ships to the client.
 |---|---|---|
 | 1 | **Vercel login** | The CLI is installed (v55.0.0) but not authenticated — no auth file, and `vercel whoami` fails. `vercel login` needs an interactive browser/email confirmation. |
 | 2 | **Render account** | No Render CLI and no `RENDER_API_KEY`. Free-tier signup is a browser flow. |
-| 3 | **A GitHub repo** | `gh` IS authenticated as `Esele24`, and Render deploys from Git — but this workspace is not a git repo, and pushing your code to a remote publishes it under your name. That is your call, not mine, especially in a folder holding a live API key. |
-
+| ~~3~~ | ~~A GitHub repo~~ | ✅ **Resolved** — the repo exists and the deploy work is pushed. See step 1. |
 ---
 
-## Step 1 — the repo (5 min)
+## ✅ Step 1 — the repo: DONE
 
-⚠️ **Check `.gitignore` before the first commit.** `ai-lab/.env` holds your real Gemini
-key. It is already ignored, but verify with `git status` that `.env` does **not** appear.
-A key in a commit stays in the history even after you delete the file.
+**https://github.com/Esele24/ai-lab** — you pushed it yourself on 2026-08-11, and the
+deployment work above is committed on top (`81a489e`).
+
+🔒 **Verified clean before and after that push:**
+
+- `.env` is **not tracked** — only `.env.example`, which holds no secret.
+- The key string appears **nowhere in the git history** (`git log -p --all -S` returned
+  nothing). A key in a commit survives deleting the file, so this was worth checking.
+
+⚠️ **The repo is PUBLIC.** That is fine for the code, and it is why the rate limit below
+is not optional: anyone can read exactly which endpoints exist and what they cost. If you
+would rather it were private:
 
 ```powershell
-cd "C:\Users\ESELE OKOGBO\Desktop\CLAUDE\ai-lab"
-git init
-git add -A
-git status          # <-- CONFIRM .env is NOT listed before going further
-git commit -m "AI Lab backend: seven AI projects, one Python server"
-gh repo create ai-lab-backend --private --source=. --push
+gh repo edit Esele24/ai-lab --visibility private --accept-visibility-change-consequences
 ```
 
-Keep it **private**. Render deploys from private repos on the free plan, and nothing
-here needs to be public.
+⚠️ **`ai-lab-web` has no repo yet.** It does not need one — you deploy to Vercel by CLI,
+not by GitHub connection. Add one only if you want it in the portfolio:
+
+```powershell
+cd "C:\Users\ESELE OKOGBO\Desktop\CLAUDE\ai-lab-web"
+git init; git add -A; git status     # confirm .env.local is NOT listed
+git commit -m "AI Lab frontend: Next.js 16 + Tailwind v4"
+gh repo create ai-lab-web --public --source=. --push
+```
 
 ## Step 2 — the backend on Render (10 min)
 

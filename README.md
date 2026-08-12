@@ -278,11 +278,16 @@ The one logged failure in the activity log is intentional: the test that confirm
 
 ## Not done
 
-- **Not deployed yet — blocked on three logins, not on code.** The Vercel CLI is not
-  authenticated, there is no Render account, and there is no git repo. Everything code-side
-  is ready and tested: `PORT`/`HOST` from the environment, `requirements.txt`,
-  `render.yaml` with training in the build step, and per-IP rate limiting. Exact steps and
-  the four free-tier gotchas: [DEPLOY.md](DEPLOY.md).
+- **On GitHub, not confirmed live.** The code is public at
+  [github.com/Esele24/ai-lab](https://github.com/Esele24/ai-lab), pushed 2026-08-11, and
+  everything code-side is ready and tested: `PORT`/`HOST` from the environment,
+  `requirements.txt`, `render.yaml` with training in the build step, and per-IP rate
+  limiting. A Render web service `ai-lab-backend` has been created from that blueprint,
+  but `https://ai-lab-backend.onrender.com` answers with a Cloudflare 404 — so either the
+  live hostname carries Render's random suffix or the first deploy has not finished.
+  **Replace this bullet with the real URL once `/api/dashboard` returns JSON.** The
+  frontend on Vercel is still pending. Exact steps and the four free-tier gotchas:
+  [DEPLOY.md](DEPLOY.md).
 - **Single-user.** The loaded dataframe and vector index are in-process, so two people
   hitting it at once would share state. The document index and database are on disk;
   the dataframe is not.
